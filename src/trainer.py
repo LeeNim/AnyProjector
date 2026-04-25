@@ -9,12 +9,18 @@ Multi-task Loss:
 
 Chỉ cập nhật trọng số của Projector. Encoder và LLM đóng băng 100%.
 
-Forward Pipeline:
-    Audio → Encoder(frozen) → encoder_output
-         → Projector(trainable) → semantic_embeds + vad_prob
-    Text  → Tokenizer → token_ids → LLM.embed_tokens → text_embeds
-    [semantic_embeds | text_embeds] → LLM(frozen).forward → logits
-    Loss = CE(logits[text_positions], text_targets) + λ · BCE(vad_prob, vad_label)
+Forward Pipeline (input chỉ có audio, text chỉ là target label):
+    Audio → Encoder(frozen) → encoder_vectors (B, T, encoder_dim)
+         → Projector(trainable) → semantic_embeds (B, T//2, llm_dim) + vad_prob (B, 1)
+         → semantic_embeds vào LLM(frozen) qua inputs_embeds
+         → LLM sinh ra câu trả lời (text)
+         → Loss = CE(logits, target_text) + λ · BCE(vad_prob, vad_label)
+
+    Khi huấn luyện: dùng teacher forcing (kỹ thuật nội bộ) để LLM học
+    dự đoán text từ audio context. Text target được nối vào SAU audio embeds
+    chỉ để tính loss — KHÔNG phải input của hệ thống.
+
+    Khi inference: chỉ cần audio → encoder → projector → LLM.generate()
 """
 
 import logging
@@ -171,12 +177,15 @@ class AlignmentTrainer:
     def _process_batch(self, batch: dict) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Xử lý 1 batch qua toàn bộ pipeline.
 
-        Pipeline:
-            waveforms → Processor → Encoder(frozen) → encoder_output
-            encoder_output → Projector(trainable) → semantic_embeds, vad_prob
-            texts → Tokenizer → token_ids → LLM.embed_tokens → text_embeds
-            [semantic_embeds | text_embeds] → LLM(frozen) → logits
-            → L_LM + λ·L_VAD
+        Pipeline (input CHỈ CÓ audio, text CHỈ LÀ target label):
+            1. Audio waveform → Processor → Encoder(frozen) → encoder_vectors
+            2. encoder_vectors → Projector(trainable) → semantic_embeds (llm_dim) + vad_prob
+            3. semantic_embeds vào LLM(frozen) qua inputs_embeds → LLM sinh text
+            4. Loss = CE(logits vs target_text) + λ·BCE(vad_prob vs vad_label)
+
+        Teacher forcing: text target được nối SAU audio embeds để LLM học
+        dự đoán next token. Loss chỉ tính trên vị trí text, không tính trên
+        vị trí audio. Tại inference, chỉ cần audio → LLM.generate().
 
         Args:
             batch: Dict từ collate_alignment.
@@ -185,97 +194,105 @@ class AlignmentTrainer:
             (total_loss, lm_loss_value, vad_loss_value) — scalar tensors.
         """
         waveforms = batch["waveforms"].to(self.device)       # (B, max_samples)
-        texts = batch["texts"]                                # list[str]
         vad_labels = batch["is_end_of_speech"].to(self.device)  # (B,)
 
-        # === 1. Audio → Encoder (frozen) ===
+        # Text chỉ dùng làm TARGET LABEL, không phải input hệ thống
+        target_texts = batch["texts"]                          # list[str]
+
+        # ================================================================
+        # BƯỚC 1: Audio → Encoder (frozen) → encoder vectors
+        # ================================================================
         with torch.no_grad():
-            # Preprocess audio qua processor/feature_extractor
             audio_inputs = self.system.processor(
                 waveforms.cpu().numpy(),
                 sampling_rate=16000,
                 return_tensors="pt",
                 padding=True,
             )
-            # Chuyển tất cả input tensors lên device
             audio_inputs = {
                 k: v.to(self.device) if isinstance(v, torch.Tensor) else v
                 for k, v in audio_inputs.items()
             }
-
-            # Forward qua encoder
             encoder_outputs = self.system.encoder(**audio_inputs)
 
-            # Lấy hidden states — tùy kiến trúc encoder
             if hasattr(encoder_outputs, "last_hidden_state"):
-                encoder_hidden = encoder_outputs.last_hidden_state  # (B, T, encoder_dim)
+                encoder_vectors = encoder_outputs.last_hidden_state  # (B, T, encoder_dim)
             else:
-                encoder_hidden = encoder_outputs[0]
+                encoder_vectors = encoder_outputs[0]
 
-        # === 2. Encoder output → Projector (trainable) ===
-        # Projector ở train mode, gradient chỉ chảy qua đây
-        semantic_embeds, vad_prob = self.system.projector(encoder_hidden)
-        # semantic_embeds: (B, T//2, llm_dim)
-        # vad_prob: (B, 1)
+        # ================================================================
+        # BƯỚC 2: Encoder vectors → Projector (trainable) → llm_dim vectors
+        # Gradient CHỈ chảy qua Projector (encoder đã frozen)
+        # ================================================================
+        semantic_embeds, vad_prob = self.system.projector(encoder_vectors)
+        # semantic_embeds: (B, T//2, llm_dim) — vector cùng dim với LLM
+        # vad_prob: (B, 1) — xác suất kết thúc câu nói
 
-        # === 3. Text → Tokenizer → LLM embed ===
+        # ================================================================
+        # BƯỚC 3: semantic_embeds → LLM (frozen) → LLM sinh text
+        #
+        # Teacher forcing (kỹ thuật training):
+        #   - Audio embeds = "context" (đầu vào thực sự của hệ thống)
+        #   - Target text embeds = nối SAU audio để LLM học dự đoán next token
+        #   - Labels: [-100 cho vị trí audio, text_ids cho vị trí text]
+        #   → Loss chỉ tính trên phần text mà LLM cần sinh ra
+        #
+        # Tại inference: chỉ dùng semantic_embeds → LLM.generate()
+        # ================================================================
         with torch.no_grad():
-            text_tokens = self.system.tokenizer(
-                texts,
+            target_tokens = self.system.tokenizer(
+                target_texts,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=512,
             ).to(self.device)
 
-            # Lấy text embeddings từ LLM embedding layer
-            text_embeds = self.system.get_llm_embedding_layer()(
-                text_tokens["input_ids"]
-            )  # (B, text_seq_len, llm_dim)
+            # Embed target text qua LLM embedding layer (chỉ để teacher forcing)
+            target_embeds = self.system.get_llm_embedding_layer()(
+                target_tokens["input_ids"]
+            )  # (B, text_len, llm_dim)
 
-        # === 4. Concatenate [audio_embeds | text_embeds] → LLM forward ===
-        # Nối semantic embeddings (từ audio) trước text embeddings
-        combined_embeds = torch.cat(
-            [semantic_embeds, text_embeds], dim=1
-        )  # (B, T//2 + text_seq_len, llm_dim)
-
-        # Tạo labels: -100 cho vị trí audio (không tính loss), text token ids cho phần text
         audio_seq_len = semantic_embeds.shape[1]
-        text_seq_len = text_tokens["input_ids"].shape[1]
+        batch_size = semantic_embeds.shape[0]
 
-        # Labels: ignore audio positions, predict text tokens
-        ignore_labels = torch.full(
-            (text_tokens["input_ids"].shape[0], audio_seq_len),
-            fill_value=-100,
-            dtype=torch.long,
-            device=self.device,
+        # Nối: [audio_context | target_text] — teacher forcing sequence
+        llm_input_embeds = torch.cat(
+            [semantic_embeds, target_embeds], dim=1
+        )  # (B, audio_len + text_len, llm_dim)
+
+        # Labels: -100 = ignore (vị trí audio), text_ids = target (vị trí text)
+        audio_ignore = torch.full(
+            (batch_size, audio_seq_len),
+            fill_value=-100, dtype=torch.long, device=self.device,
         )
-        # Shift labels left by 1 for next-token prediction
-        text_labels = text_tokens["input_ids"].clone()
-        labels = torch.cat([ignore_labels, text_labels], dim=1)  # (B, T//2 + text_seq_len)
+        labels = torch.cat(
+            [audio_ignore, target_tokens["input_ids"]], dim=1
+        )  # (B, audio_len + text_len)
 
-        # Attention mask cho combined sequence
+        # Attention mask
         audio_attn = torch.ones(
-            (waveforms.shape[0], audio_seq_len),
-            dtype=torch.long,
-            device=self.device,
+            (batch_size, audio_seq_len),
+            dtype=torch.long, device=self.device,
         )
-        combined_attn = torch.cat(
-            [audio_attn, text_tokens["attention_mask"]], dim=1
+        attn_mask = torch.cat(
+            [audio_attn, target_tokens["attention_mask"]], dim=1
         )
 
-        # Forward qua LLM (frozen, nhưng gradient chảy qua inputs_embeds → projector)
+        # Forward qua LLM — gradient chảy ngược qua inputs_embeds → projector
         llm_outputs = self.system.llm(
-            inputs_embeds=combined_embeds,
-            attention_mask=combined_attn,
+            inputs_embeds=llm_input_embeds,
+            attention_mask=attn_mask,
             labels=labels,
         )
 
-        # === 5. Compute Losses ===
-        # L_LM: CrossEntropy từ LLM output (đã tính sẵn trong llm_outputs.loss)
+        # ================================================================
+        # BƯỚC 4: Compute Losses
+        # ================================================================
+        # L_LM: CE loss — LLM học sinh text từ audio context
         lm_loss = llm_outputs.loss
 
-        # L_VAD: BCELoss
+        # L_VAD: BCE loss — Projector học phân loại kết thúc câu
         vad_loss = self.vad_criterion(vad_prob.squeeze(-1), vad_labels)
 
         # L_total = L_LM + λ · L_VAD
