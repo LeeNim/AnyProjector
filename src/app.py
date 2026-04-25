@@ -1,11 +1,8 @@
 """
-app.py - Giao diện Cấu hình Web (Phase 0: Dynamic Loader Frontend).
+app.py - Giao diện Web cho AnyProjector.
 
-Chức năng:
-- Ô nhập Hugging Face ID cho Audio Encoder
-- Ô nhập Hugging Face ID cho LLM Decoder
-- Nút "Khởi tạo Hệ thống" -> tải model về cache cục bộ
-- Hiển thị thông tin model (hidden_size, model_type)
+Phase 0: Tải model từ HuggingFace Hub.
+Phase 1: Xây dựng kiến trúc mạng (Encoder frozen + LLM 4-bit + Projector trainable).
 """
 
 import logging
@@ -16,6 +13,7 @@ import gradio as gr
 
 from src.config import load_config, get_default_encoder_id, get_default_llm_id, get_cache_dir
 from src.model_loader import load_and_inspect_model, ModelInfo
+from src.system import AnyProjectorSystem
 
 # Setup logging
 logging.basicConfig(
@@ -25,8 +23,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------- State ----------
-# Lưu trữ model info sau khi tải thành công (dùng cho Phase 1+)
 loaded_models: dict[str, ModelInfo] = {}
+system: AnyProjectorSystem | None = None
 
 
 # ---------- Core Logic ----------
@@ -117,7 +115,7 @@ def initialize_system(
             f"- Conv1d: ({enc_dim} → {enc_dim}, stride=2)\n"
             f"- Semantic Route: Linear({enc_dim} → {llm_dim})\n"
             f"- VAD Route: Linear({enc_dim} → 1)\n\n"
-            f"*Sẵn sàng cho Phase 1: Khởi tạo kiến trúc mạng.*"
+            f"*Sẵn sàng! Nhấn **Xây dựng Kiến trúc** bên dưới.*"
         )
     else:
         status = "## ⚠️ Khởi tạo chưa hoàn tất\nVui lòng kiểm tra lỗi bên dưới."
@@ -126,9 +124,54 @@ def initialize_system(
     return status, encoder_summary, llm_summary
 
 
+def build_architecture(progress=gr.Progress(track_tqdm=True)) -> str:
+    """Phase 1: Xây dựng kiến trúc mạng.
+
+    Load Encoder (frozen) + LLM (4-bit, frozen) + tạo Projector (trainable).
+
+    Returns:
+        Markdown string mô tả kiến trúc đã xây dựng.
+    """
+    global system
+
+    if "encoder" not in loaded_models or "llm" not in loaded_models:
+        return "❌ Chưa tải model. Vui lòng nhấn **Khởi tạo Hệ thống** trước."
+
+    try:
+        progress(0.0, desc="Đang xây dựng kiến trúc...")
+
+        system = AnyProjectorSystem(
+            encoder_info=loaded_models["encoder"],
+            llm_info=loaded_models["llm"],
+        )
+
+        progress(0.1, desc="Đang tải Encoder lên GPU...")
+        info = system.build(
+            progress_callback=lambda msg: logger.info(msg),
+        )
+
+        progress(1.0, desc="Hoàn tất!")
+
+        return (
+            f"## ✅ Kiến trúc đã sẵn sàng!\n\n"
+            f"| Thành phần | Giá trị |\n"
+            f"|---|---|\n"
+            f"| Device | `{info.device}` |\n"
+            f"| Encoder | `{info.encoder_type}` (encoder_dim={info.encoder_dim}) |\n"
+            f"| LLM | `{info.llm_type}` (llm_dim={info.llm_dim}) |\n"
+            f"| LLM Quantization | {info.llm_quantization} |\n"
+            f"| **Projector Params** | **{info.projector_params:,}** (trainable) |\n\n"
+            f"```\n{system.projector}\n```\n\n"
+            f"*Sẵn sàng cho Phase 2: Huấn luyện đa nhiệm.*"
+        )
+    except Exception as e:
+        logger.error(f"Build failed: {e}", exc_info=True)
+        return f"❌ **Lỗi xây dựng kiến trúc:**\n```\n{e}\n```"
+
+
 # ---------- UI ----------
 def create_ui() -> gr.Blocks:
-    """Xây dựng giao diện Gradio cho Phase 0."""
+    """Xây dựng giao diện Gradio."""
     config = load_config()
     default_encoder = get_default_encoder_id(config)
     default_llm = get_default_llm_id(config)
@@ -191,11 +234,31 @@ def create_ui() -> gr.Blocks:
                 gr.Markdown("### 🧠 LLM Decoder")
                 llm_output = gr.Markdown(value="")
 
-        # --- Event ---
+        # --- Phase 1: Build Architecture ---
+        gr.Markdown("---")
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("### 🏗️ Phase 1: Xây dựng Kiến trúc")
+                build_btn = gr.Button(
+                    value="🔗 Xây dựng Kiến trúc",
+                    variant="secondary",
+                    size="lg",
+                )
+            with gr.Column(scale=2):
+                build_output = gr.Markdown(
+                    value="*Tải model trước, sau đó nhấn nút xây dựng.*"
+                )
+
+        # --- Events ---
         init_btn.click(
             fn=initialize_system,
             inputs=[encoder_input, llm_input],
             outputs=[status_output, encoder_output, llm_output],
+        )
+        build_btn.click(
+            fn=build_architecture,
+            inputs=[],
+            outputs=[build_output],
         )
 
     return app

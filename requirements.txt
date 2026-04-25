@@ -4,3 +4,7 @@ transformers>=4.40.0
 huggingface-hub>=0.23.0
 torch>=2.0.0
 pyyaml>=6.0
+
+# ===== Phase 1: Dynamic Model Skeleton =====
+bitsandbytes>=0.41.0
+accelerate>=0.30.0
