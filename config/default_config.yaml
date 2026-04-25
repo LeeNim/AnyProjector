@@ -1,0 +1,22 @@
+# ============================================
+# AnyProjector - Default Configuration
+# ============================================
+
+# --- Model Defaults ---
+models:
+  audio_encoder:
+    default_id: "openai/whisper-base"      # 74M params, fits 8GB VRAM
+    description: "Audio Encoder (STT model)"
+  llm_decoder:
+    default_id: "Qwen/Qwen2.5-1.5B-Instruct"  # Optimized for Agent reasoning
+    description: "LLM Decoder (Language model)"
+
+# --- Cache ---
+cache:
+  models_dir: "./models_cache"             # Local cache for downloaded models
+
+# --- Server ---
+server:
+  host: "0.0.0.0"
+  port: 7860
+  share: false

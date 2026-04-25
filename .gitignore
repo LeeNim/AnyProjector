@@ -1,0 +1,63 @@
+# ========================
+# AnyProjector .gitignore
+# ========================
+
+# --- Documentation & Planning (not source code) ---
+Docs and more/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+eggs/
+*.whl
+
+# --- Virtual Environments ---
+venv/
+.venv/
+env/
+.env/
+
+# --- IDE & Editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- PyTorch / ML ---
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+wandb/
+runs/
+logs/
+outputs/
+
+# --- Hugging Face Cache ---
+.cache/
+
+# --- Dataset (user-managed, too large for git) ---
+dataset/
+
+# --- Misc ---
+*.log
+*.tmp
+
+Docs and more/
