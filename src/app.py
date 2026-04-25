@@ -3,6 +3,7 @@ app.py - Giao diện Web cho AnyProjector.
 
 Phase 0: Tải model từ HuggingFace Hub.
 Phase 1: Xây dựng kiến trúc mạng (Encoder frozen + LLM 4-bit + Projector trainable).
+Phase 2: Huấn luyện đa nhiệm (Alignment + VAD).
 """
 
 import logging
@@ -14,6 +15,8 @@ import gradio as gr
 from src.config import load_config, get_default_encoder_id, get_default_llm_id, get_cache_dir
 from src.model_loader import load_and_inspect_model, ModelInfo
 from src.system import AnyProjectorSystem
+from src.dataset import create_alignment_dataloader
+from src.trainer import AlignmentTrainer, TrainingConfig
 
 # Setup logging
 logging.basicConfig(
@@ -169,6 +172,96 @@ def build_architecture(progress=gr.Progress(track_tqdm=True)) -> str:
         return f"❌ **Lỗi xây dựng kiến trúc:**\n```\n{e}\n```"
 
 
+def start_alignment_training(
+    data_dir: str,
+    num_epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    vad_weight: float,
+    grad_accum: int,
+    progress=gr.Progress(track_tqdm=True),
+) -> str:
+    """Phase 2: Bắt đầu huấn luyện Alignment.
+
+    Returns:
+        Markdown string kết quả training.
+    """
+    global system
+
+    if system is None or not system._built:
+        return "❌ Chưa xây dựng kiến trúc. Hoàn thành Phase 0 + 1 trước."
+
+    data_dir = data_dir.strip()
+    if not data_dir:
+        return "❌ Vui lòng nhập đường dẫn thư mục dataset."
+
+    data_path = Path(data_dir)
+    if not data_path.exists():
+        return (
+            f"❌ Thư mục không tồn tại: `{data_path}`\n\n"
+            f"Cấu trúc cần có:\n```\n"
+            f"{data_dir}/\n"
+            f"├── wavs/\n"
+            f"│   ├── audio_001.wav\n"
+            f"│   └── ...\n"
+            f"└── metadata_alignment.jsonl\n```"
+        )
+
+    try:
+        # Tạo training config
+        config = TrainingConfig(
+            learning_rate=learning_rate,
+            num_epochs=int(num_epochs),
+            vad_loss_weight=vad_weight,
+            gradient_accumulation_steps=int(grad_accum),
+        )
+
+        # Tạo DataLoader
+        progress(0.0, desc="Đang tạo DataLoader...")
+        dataloader = create_alignment_dataloader(
+            data_dir=data_dir,
+            batch_size=int(batch_size),
+        )
+
+        # Tạo Trainer
+        trainer = AlignmentTrainer(system=system, config=config)
+
+        # Training
+        log_lines = []
+
+        def on_progress(msg: str):
+            log_lines.append(msg)
+            logger.info(msg)
+
+        all_metrics = trainer.train(
+            dataloader=dataloader,
+            progress_callback=on_progress,
+        )
+
+        progress(1.0, desc="Hoàn tất!")
+
+        # Tạo summary
+        summary = "## ✅ Huấn luyện hoàn tất!\n\n"
+        summary += "| Epoch | Total Loss | LM Loss | VAD Loss | Time |\n"
+        summary += "|---|---|---|---|---|\n"
+        for m in all_metrics:
+            summary += (
+                f"| {m.epoch} | {m.avg_total_loss:.4f} | "
+                f"{m.avg_lm_loss:.4f} | {m.avg_vad_loss:.4f} | "
+                f"{m.elapsed_seconds:.1f}s |\n"
+            )
+        summary += f"\n**Checkpoints saved to:** `{config.save_dir}`\n\n"
+        summary += "*Sẵn sàng cho Phase 3: Fine-tune Agent.*"
+
+        return summary
+
+    except FileNotFoundError as e:
+        return f"❌ **Lỗi dữ liệu:** {e}"
+    except Exception as e:
+        logger.error(f"Training failed: {e}", exc_info=True)
+        return f"❌ **Lỗi training:**\n```\n{e}\n```"
+
+
 # ---------- UI ----------
 def create_ui() -> gr.Blocks:
     """Xây dựng giao diện Gradio."""
@@ -249,6 +342,54 @@ def create_ui() -> gr.Blocks:
                     value="*Tải model trước, sau đó nhấn nút xây dựng.*"
                 )
 
+        # --- Phase 2: Alignment Training ---
+        gr.Markdown("---")
+        with gr.Row():
+            with gr.Column(scale=1):
+                gr.Markdown("### 🎓 Phase 2: Huấn luyện Alignment")
+
+                train_data_dir = gr.Textbox(
+                    label="📁 Thư mục dataset",
+                    value=config.get("dataset", {}).get(
+                        "phase2_alignment", "./dataset/phase2_alignment"
+                    ),
+                    info="Thư mục chứa wavs/ và metadata_alignment.jsonl",
+                )
+
+                with gr.Row():
+                    train_epochs = gr.Number(
+                        label="Epochs", value=10, precision=0, minimum=1,
+                    )
+                    train_batch = gr.Number(
+                        label="Batch size", value=4, precision=0, minimum=1,
+                    )
+
+                with gr.Row():
+                    train_lr = gr.Number(
+                        label="Learning Rate", value=1e-4,
+                    )
+                    train_vad_w = gr.Slider(
+                        label="λ VAD Loss", minimum=0.0, maximum=2.0,
+                        value=0.5, step=0.1,
+                    )
+
+                train_grad_accum = gr.Number(
+                    label="Gradient Accumulation Steps",
+                    value=4, precision=0, minimum=1,
+                )
+
+                train_btn = gr.Button(
+                    value="🎓 Bắt đầu Huấn luyện",
+                    variant="primary",
+                    size="lg",
+                )
+
+            with gr.Column(scale=2):
+                gr.Markdown("### 📈 Kết quả")
+                train_output = gr.Markdown(
+                    value="*Xây dựng kiến trúc trước, sau đó bắt đầu huấn luyện.*"
+                )
+
         # --- Events ---
         init_btn.click(
             fn=initialize_system,
@@ -259,6 +400,14 @@ def create_ui() -> gr.Blocks:
             fn=build_architecture,
             inputs=[],
             outputs=[build_output],
+        )
+        train_btn.click(
+            fn=start_alignment_training,
+            inputs=[
+                train_data_dir, train_epochs, train_batch,
+                train_lr, train_vad_w, train_grad_accum,
+            ],
+            outputs=[train_output],
         )
 
     return app

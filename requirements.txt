@@ -8,3 +8,6 @@ pyyaml>=6.0
 # ===== Phase 1: Dynamic Model Skeleton =====
 bitsandbytes>=0.41.0
 accelerate>=0.30.0
+
+# ===== Phase 2: Alignment Training =====
+torchaudio>=2.0.0

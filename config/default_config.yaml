@@ -20,3 +20,26 @@ server:
   host: "0.0.0.0"
   port: 7860
   share: false
+
+# --- Dataset ---
+dataset:
+  base_dir: "./dataset"
+  phase2_alignment: "./dataset/phase2_alignment"
+  phase3_agentic: "./dataset/phase3_agentic"
+  sample_rate: 16000
+  max_audio_seconds: 30.0
+
+# --- Phase 2: Alignment Training ---
+training:
+  learning_rate: 1.0e-4
+  weight_decay: 0.01
+  num_epochs: 10
+  batch_size: 4
+  gradient_accumulation_steps: 4    # Effective batch = 4 * 4 = 16
+  max_grad_norm: 1.0
+  warmup_steps: 100
+  vad_loss_weight: 0.5              # λ cho L_VAD trong L_total = L_LM + λ·L_VAD
+  log_interval: 10
+  num_workers: 2
+  save_dir: "./checkpoints"
+  save_every_epoch: true
