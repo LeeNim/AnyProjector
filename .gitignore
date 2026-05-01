@@ -24,6 +24,7 @@ env/
 .env/
 
 # --- IDE & Editor ---
+.agent/
 .vscode/
 .idea/
 *.swp
