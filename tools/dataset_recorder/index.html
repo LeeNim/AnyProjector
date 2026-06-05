@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="AnyProjector Dataset Recorder — Thu âm và tạo dataset cho huấn luyện Voice Agent.">
+    <title>AnyProjector — Dataset Recorder</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- ===== Header ===== -->
+        <header class="app-header">
+            <div class="header-content">
+                <h1>🎙️ AnyProjector <span class="header-accent">Dataset Recorder</span></h1>
+                <p class="header-sub">Thu âm → Annotate → Export dataset cho huấn luyện Voice Agent</p>
+            </div>
+        </header>
+
+        <!-- ===== Step 1: Configuration ===== -->
+        <section class="card" id="config-section">
+            <div class="card-header">
+                <span class="step-badge">1</span>
+                <h2>Cấu hình thu âm</h2>
+            </div>
+            <div class="card-body">
+                <div class="form-grid">
+                    <div class="form-group">
+                        <label for="audio-device">🎤 Thiết bị thu âm</label>
+                        <select id="audio-device">
+                            <option value="">Đang tải thiết bị...</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="sample-count">📊 Số lượng mẫu</label>
+                        <input type="number" id="sample-count" min="1" max="500" value="10">
+                    </div>
+                    <div class="form-group">
+                        <label for="dataset-phase">📁 Loại dataset</label>
+                        <select id="dataset-phase">
+                            <option value="phase2_alignment">Phase 2 — Alignment (phiên âm)</option>
+                            <option value="phase3_agentic">Phase 3 — Agentic (tool calling)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>⏱️ Thời gian mỗi mẫu</label>
+                        <div class="static-value">10 giây (cố định)</div>
+                    </div>
+                </div>
+                <button class="btn btn-primary" id="start-session-btn">
+                    <span class="btn-icon">▶</span> Bắt đầu thu âm
+                </button>
+            </div>
+        </section>
+
+        <!-- ===== Step 2: Recording ===== -->
+        <section class="card hidden" id="recording-section">
+            <div class="card-header">
+                <span class="step-badge">2</span>
+                <h2>Thu âm</h2>
+                <div class="progress-info">
+                    <span id="progress-text">Mẫu 0/0</span>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="progress-bar"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Current recording -->
+                <div class="recording-area" id="recording-area">
+                    <div class="recording-visual">
+                        <canvas id="waveform-canvas" width="600" height="120"></canvas>
+                        <div class="timer" id="timer">10.0</div>
+                    </div>
+                    <div class="recording-controls">
+                        <button class="btn btn-record" id="record-btn">
+                            <span class="record-dot"></span> Thu âm mẫu #<span id="current-sample-num">1</span>
+                        </button>
+                        <button class="btn btn-secondary hidden" id="stop-btn">⏹ Dừng</button>
+                    </div>
+                </div>
+
+                <!-- Recorded samples list -->
+                <div class="samples-list" id="samples-list">
+                    <!-- Dynamically populated -->
+                </div>
+
+                <div class="recording-actions hidden" id="recording-actions">
+                    <button class="btn btn-primary" id="go-to-augment-btn">
+                        <span class="btn-icon">→</span> Tiếp: Augmentation & Annotate
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== Step 3: Augmentation ===== -->
+        <section class="card hidden" id="augment-section">
+            <div class="card-header">
+                <span class="step-badge">3</span>
+                <h2>Data Augmentation</h2>
+            </div>
+            <div class="card-body">
+                <p class="info-text">Tạo thêm mẫu biến thể từ các mẫu đã thu để tăng diversity cho dataset.</p>
+                <div class="augment-options">
+                    <label class="checkbox-card">
+                        <input type="checkbox" id="aug-pitch-up" checked>
+                        <div class="checkbox-content">
+                            <span class="checkbox-title">🔺 Pitch Up (+2 semitones)</span>
+                            <span class="checkbox-desc">Mô phỏng giọng cao hơn (nữ / trẻ em)</span>
+                        </div>
+                    </label>
+                    <label class="checkbox-card">
+                        <input type="checkbox" id="aug-pitch-down" checked>
+                        <div class="checkbox-content">
+                            <span class="checkbox-title">🔻 Pitch Down (-2 semitones)</span>
+                            <span class="checkbox-desc">Mô phỏng giọng trầm hơn (nam)</span>
+                        </div>
+                    </label>
+                    <label class="checkbox-card">
+                        <input type="checkbox" id="aug-noise">
+                        <div class="checkbox-content">
+                            <span class="checkbox-title">🔊 Background Noise</span>
+                            <span class="checkbox-desc">Thêm white noise nhẹ (mô phỏng môi trường ồn)</span>
+                        </div>
+                    </label>
+                </div>
+                <div class="augment-summary hidden" id="augment-summary">
+                    <p>Sẽ tạo thêm <strong id="aug-count">0</strong> mẫu augmented.</p>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-secondary" id="skip-augment-btn">Bỏ qua</button>
+                    <button class="btn btn-primary" id="run-augment-btn">
+                        <span class="btn-icon">⚡</span> Tạo Augmented Samples
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== Step 4: Annotation ===== -->
+        <section class="card hidden" id="annotate-section">
+            <div class="card-header">
+                <span class="step-badge">4</span>
+                <h2>Annotation</h2>
+                <div class="progress-info">
+                    <span id="annotate-progress-text">0/0 đã gán nhãn</span>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="annotate-list" id="annotate-list">
+                    <!-- Dynamically populated -->
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="go-to-export-btn">
+                        <span class="btn-icon">→</span> Tiếp: Export
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== Step 5: Export ===== -->
+        <section class="card hidden" id="export-section">
+            <div class="card-header">
+                <span class="step-badge">5</span>
+                <h2>Export Dataset</h2>
+            </div>
+            <div class="card-body">
+                <div class="export-preview" id="export-preview">
+                    <!-- Preview metadata.jsonl -->
+                </div>
+                <button class="btn btn-primary btn-lg" id="export-btn">
+                    <span class="btn-icon">📦</span> Download ZIP
+                </button>
+            </div>
+        </section>
+    </div>
+
+    <!-- JSZip for ZIP export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AnyProjector Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0f1117;
+  --surface: #1a1b26;
+  --surface2: #24253a;
+  --border: #2f3146;
+  --text: #c9d1d9;
+  --text-dim: #8b949e;
+  --accent: #818cf8;
+  --accent2: #a78bfa;
+  --green: #34d399;
+  --red: #f87171;
+  --orange: #fbbf24;
+  --radius: 12px;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family:'Inter',system-ui,sans-serif; background:var(--bg); color:var(--text);
+  min-height:100vh; padding:24px;
+}
+h1 { font-size:1.8rem; font-weight:700; }
+h1 span { background:linear-gradient(135deg,var(--accent),var(--accent2)); -webkit-background-clip:text; -webkit-text-fill-color:transparent; }
+.subtitle { color:var(--text-dim); margin:4px 0 20px; font-size:0.9rem; }
+
+/* Tabs */
+.tabs { display:flex; gap:4px; margin-bottom:20px; }
+.tab {
+  padding:10px 20px; border-radius:8px 8px 0 0; cursor:pointer;
+  background:var(--surface); color:var(--text-dim); border:1px solid var(--border);
+  border-bottom:none; font-weight:500; transition:all .2s;
+}
+.tab:hover { color:var(--text); background:var(--surface2); }
+.tab.active { background:var(--surface2); color:var(--accent); border-color:var(--accent); }
+.tab-content { display:none; }
+.tab-content.active { display:block; }
+
+/* Layout */
+.panel {
+  background:var(--surface2); border:1px solid var(--border);
+  border-radius:var(--radius); padding:20px;
+}
+.grid { display:grid; grid-template-columns:340px 1fr; gap:20px; }
+@media(max-width:800px) { .grid { grid-template-columns:1fr; } }
+
+/* Recorder */
+.recorder {
+  display:flex; flex-direction:column; align-items:center; gap:12px;
+  padding:20px; background:var(--surface); border-radius:var(--radius); border:1px solid var(--border);
+}
+.rec-btns { display:flex; gap:8px; }
+.rec-btn {
+  width:48px; height:48px; border-radius:50%; border:none; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; font-size:1.2rem;
+  transition:all .15s; color:white;
+}
+.rec-btn.record { background:#ef4444; }
+.rec-btn.record:hover { background:#dc2626; transform:scale(1.1); }
+.rec-btn.record.recording { animation:pulse 1s infinite; }
+.rec-btn.stop { background:#6b7280; }
+.rec-btn.stop:hover { background:#4b5563; }
+.rec-btn.play { background:var(--accent); }
+.rec-btn.play:hover { background:var(--accent2); }
+.rec-btn:disabled { opacity:.3; cursor:not-allowed; transform:none; }
+@keyframes pulse { 0%,100%{box-shadow:0 0 0 0 rgba(239,68,68,.4)} 50%{box-shadow:0 0 0 12px rgba(239,68,68,0)} }
+
+.rec-status { font-size:.85rem; color:var(--text-dim); min-height:20px; }
+canvas.waveform { width:100%; height:60px; border-radius:8px; background:var(--surface2); }
+audio { width:100%; margin-top:4px; height:36px; }
+
+/* Controls */
+.control-group { margin-top:14px; }
+.control-group label { display:block; font-size:.8rem; color:var(--text-dim); margin-bottom:4px; font-weight:500; }
+.control-group select, .control-group input[type=text], .control-group textarea {
+  width:100%; padding:8px 10px; background:var(--surface); border:1px solid var(--border);
+  border-radius:8px; color:var(--text); font-size:.85rem; font-family:inherit;
+}
+.control-group textarea { resize:vertical; min-height:60px; }
+.control-row { display:flex; gap:12px; align-items:center; margin-top:8px; }
+.control-row label { font-size:.8rem; color:var(--text-dim); }
+input[type=range] { flex:1; accent-color:var(--accent); }
+.range-val { font-size:.8rem; color:var(--accent); min-width:32px; }
+
+.check-row { display:flex; gap:16px; margin-top:8px; flex-wrap:wrap; }
+.check-row label { display:flex; align-items:center; gap:6px; font-size:.85rem; cursor:pointer; }
+input[type=checkbox] { accent-color:var(--accent); width:16px; height:16px; }
+
+.btn {
+  padding:10px 20px; border:none; border-radius:8px; font-weight:600; cursor:pointer;
+  font-family:inherit; font-size:.9rem; transition:all .2s; width:100%; margin-top:14px;
+}
+.btn-primary { background:linear-gradient(135deg,var(--accent),var(--accent2)); color:white; }
+.btn-primary:hover { filter:brightness(1.15); transform:translateY(-1px); }
+.btn-primary:disabled { opacity:.5; cursor:wait; transform:none; filter:none; }
+
+/* Results */
+.result-card {
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  padding:16px; margin-bottom:12px;
+}
+.result-card h3 { font-size:.9rem; margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+.result-card .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+.result-card .dot.green { background:var(--green); }
+.result-card .dot.blue { background:var(--accent); }
+.result-text {
+  font-size:1rem; line-height:1.6; padding:10px; background:var(--surface2);
+  border-radius:8px; min-height:40px; white-space:pre-wrap;
+}
+.timing { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; }
+.timing-chip {
+  padding:4px 10px; border-radius:20px; font-size:.75rem; font-weight:500;
+  background:var(--surface2); border:1px solid var(--border);
+}
+.timing-chip.total { background:rgba(129,140,248,.15); border-color:var(--accent); color:var(--accent); }
+
+.comparison {
+  display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px;
+  padding:12px; background:var(--surface2); border-radius:8px;
+}
+.comp-bar { height:28px; border-radius:6px; display:flex; align-items:center; padding:0 10px; font-size:.75rem; font-weight:600; color:white; min-width:60px; transition:width .5s ease; }
+.comp-label { font-size:.8rem; color:var(--text-dim); margin-bottom:4px; }
+
+/* Tool result */
+.tool-json {
+  background:#1e1b2e; color:#c4b5fd; padding:12px; border-radius:8px;
+  font-family:'Cascadia Code',monospace; font-size:.8rem; white-space:pre-wrap; overflow-x:auto;
+}
+.tool-result { padding:10px; background:rgba(52,211,153,.1); border:1px solid rgba(52,211,153,.3); border-radius:8px; margin-top:8px; }
+
+/* VAD segments */
+.seg-table { width:100%; border-collapse:collapse; font-size:.85rem; }
+.seg-table th { text-align:left; padding:8px 10px; border-bottom:2px solid var(--border); color:var(--text-dim); font-weight:500; }
+.seg-table td { padding:8px 10px; border-bottom:1px solid var(--border); }
+.seg-table tr:hover td { background:rgba(129,140,248,.05); }
+
+/* Spinner */
+.spinner { display:inline-block; width:18px; height:18px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .6s linear infinite; }
+@keyframes spin { to{transform:rotate(360deg)} }
+.loading { display:flex; align-items:center; gap:8px; color:var(--text-dim); padding:20px; }
+
+/* Log bar */
+.log-bar {
+  display:flex; align-items:center; gap:12px; padding:10px 16px;
+  background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
+  margin-bottom:16px;
+}
+.log-bar .log-count {
+  font-size:.85rem; color:var(--text-dim); flex:1;
+}
+.log-bar .log-count strong { color:var(--accent); }
+.log-btn {
+  padding:6px 14px; border:1px solid var(--border); border-radius:8px;
+  background:var(--surface2); color:var(--text); font-size:.8rem; font-weight:500;
+  cursor:pointer; transition:all .15s; font-family:inherit;
+}
+.log-btn:hover { border-color:var(--accent); color:var(--accent); }
+.log-btn.danger:hover { border-color:var(--red); color:var(--red); }
+</style>
+</head>
+<body>
+
+<h1>🎙️ <span>AnyProjector</span> Demo</h1>
+<p class="subtitle">Whisper Encoder → Q-Former Projector → LLM | FastAPI Backend</p>
+
+<div class="log-bar">
+  <div class="log-count">📋 Log: <strong id="logCount">0</strong> entries</div>
+  <button class="log-btn" onclick="downloadLog()">⬇️ Download CSV</button>
+  <button class="log-btn danger" onclick="clearLog()">🗑️ Clear</button>
+</div>
+
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('transcribe')">🎤 Transcribe</div>
+  <div class="tab" onclick="switchTab('tools')">🛠️ Tools</div>
+  <div class="tab" onclick="switchTab('vad')">🎙️ VAD Segment</div>
+</div>
+
+<!-- ═══ Tab 1: Transcription ═══ -->
+<div id="tab-transcribe" class="tab-content active">
+  <div class="grid">
+    <div>
+      <div class="recorder" id="rec1">
+        <canvas class="waveform" id="waveform1"></canvas>
+        <div class="rec-btns">
+          <button class="rec-btn record" onclick="startRec('1')" title="Record">⏺</button>
+          <button class="rec-btn stop" onclick="stopRec('1')" disabled title="Stop">⏹</button>
+          <button class="rec-btn play" onclick="playRec('1')" disabled title="Play">▶</button>
+        </div>
+        <div class="rec-status" id="status1">Click ⏺ to record</div>
+        <audio id="audio1" controls style="display:none"></audio>
+
+        <input type="file" id="file1" accept="audio/*" onchange="loadFile('1',this)" style="display:none">
+        <button class="btn" style="background:var(--surface);border:1px solid var(--border);margin-top:4px;color:var(--text-dim)" onclick="document.getElementById('file1').click()">📁 Upload file</button>
+      </div>
+
+      <div class="control-group">
+        <div class="check-row">
+          <label><input type="checkbox" id="chkProj" checked> Projector ON</label>
+          <label><input type="checkbox" id="chkStandalone" checked> Projector OFF</label>
+          <label><input type="checkbox" id="chkTools"> 🔧 Enable Tools</label>
+        </div>
+      </div>
+      <div class="control-group">
+        <label>Prompt Preset</label>
+        <select id="presetSelect" onchange="document.getElementById('promptText').value=this.options[this.selectedIndex].dataset.prompt">
+        </select>
+      </div>
+      <div class="control-group">
+        <label>Custom Prompt</label>
+        <textarea id="promptText">Transcribe the following audio in Vietnamese:</textarea>
+      </div>
+      <div class="control-row">
+        <label>Temp</label>
+        <input type="range" id="tempSlider" min="0" max="1" step="0.05" value="0.1" oninput="document.getElementById('tempVal').textContent=this.value">
+        <span class="range-val" id="tempVal">0.1</span>
+      </div>
+      <div class="control-row">
+        <label>Tokens</label>
+        <input type="range" id="tokSlider" min="16" max="512" step="16" value="100" oninput="document.getElementById('tokVal').textContent=this.value">
+        <span class="range-val" id="tokVal">100</span>
+      </div>
+      <button class="btn btn-primary" id="btnTranscribe" onclick="runTranscribe()" disabled>🚀 Transcribe</button>
+    </div>
+
+    <div id="results1">
+      <div class="result-card" id="cardProj" style="display:none">
+        <h3><span class="dot green"></span> Projector ON (Encoder → Q-Former → LLM)</h3>
+        <div class="result-text" id="projText"></div>
+        <div class="timing" id="projTiming"></div>
+      </div>
+      <div class="result-card" id="cardStandalone" style="display:none">
+        <h3><span class="dot blue"></span> Projector OFF (Whisper → Text → LLM)</h3>
+        <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:6px">Whisper transcript:</div>
+        <div class="result-text" id="stanWhisper" style="font-size:.85rem;opacity:.7;margin-bottom:8px"></div>
+        <div style="font-size:.8rem;color:var(--text-dim);margin-bottom:6px">LLM output:</div>
+        <div class="result-text" id="stanText"></div>
+        <div class="timing" id="stanTiming"></div>
+      </div>
+      <div id="compArea"></div>
+      <div class="result-card" id="cardTool1" style="display:none">
+        <h3>🔧 Tool Call (from Projector)</h3>
+        <div class="tool-json" id="projToolJSON">—</div>
+        <div class="tool-result" id="projToolRes" style="margin-top:8px">—</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Tab 2: Tools ═══ -->
+<div id="tab-tools" class="tab-content">
+  <div class="grid">
+    <div>
+      <div class="recorder" id="rec2">
+        <canvas class="waveform" id="waveform2"></canvas>
+        <div class="rec-btns">
+          <button class="rec-btn record" onclick="startRec('2')" title="Record">⏺</button>
+          <button class="rec-btn stop" onclick="stopRec('2')" disabled>⏹</button>
+          <button class="rec-btn play" onclick="playRec('2')" disabled>▶</button>
+        </div>
+        <div class="rec-status" id="status2">Click ⏺ to record</div>
+        <audio id="audio2" controls style="display:none"></audio>
+        <input type="file" id="file2" accept="audio/*" onchange="loadFile('2',this)" style="display:none">
+        <button class="btn" style="background:var(--surface);border:1px solid var(--border);margin-top:4px;color:var(--text-dim)" onclick="document.getElementById('file2').click()">📁 Upload file</button>
+      </div>
+      <div class="control-group">
+        <label>System Prompt</label>
+        <textarea id="toolPrompt">Listen to the audio and respond. Use tools when appropriate.</textarea>
+      </div>
+      <div class="control-group">
+        <label>Enabled Tools</label>
+        <div class="check-row">
+          <label><input type="checkbox" class="toolChk" value="calculator" checked> calculator</label>
+          <label><input type="checkbox" class="toolChk" value="get_time" checked> get_time</label>
+          <label><input type="checkbox" class="toolChk" value="translate" checked> translate</label>
+          <label><input type="checkbox" class="toolChk" value="search" checked> search</label>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnTools" onclick="runTools()" disabled>🔧 Run with Tools</button>
+    </div>
+    <div id="results2">
+      <div class="result-card"><h3>💬 LLM Response</h3><div class="result-text" id="toolLLM">—</div><div class="timing" id="toolTiming"></div></div>
+      <div class="result-card"><h3>🔧 Tool Call</h3><div class="tool-json" id="toolJSON">—</div></div>
+      <div class="result-card"><h3>✅ Tool Result</h3><div class="tool-result" id="toolRes">—</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Tab 3: VAD ═══ -->
+<div id="tab-vad" class="tab-content">
+  <div class="grid">
+    <div>
+      <div class="recorder" id="rec3">
+        <canvas class="waveform" id="waveform3"></canvas>
+        <div class="rec-btns">
+          <button class="rec-btn record" onclick="startRec('3')" title="Record">⏺</button>
+          <button class="rec-btn stop" onclick="stopRec('3')" disabled>⏹</button>
+          <button class="rec-btn play" onclick="playRec('3')" disabled>▶</button>
+        </div>
+        <div class="rec-status" id="status3">Click ⏺ to record</div>
+        <audio id="audio3" controls style="display:none"></audio>
+        <input type="file" id="file3" accept="audio/*" onchange="loadFile('3',this)" style="display:none">
+        <button class="btn" style="background:var(--surface);border:1px solid var(--border);margin-top:4px;color:var(--text-dim)" onclick="document.getElementById('file3').click()">📁 Upload file</button>
+      </div>
+      <div class="control-group">
+        <div class="check-row">
+          <label><input type="checkbox" id="vadProj"> Use Projector</label>
+        </div>
+      </div>
+      <button class="btn btn-primary" id="btnVad" onclick="runVad()" disabled>🔍 Segment & Transcribe</button>
+    </div>
+    <div id="results3">
+      <div class="result-card"><h3>🎙️ VAD Segments</h3><div id="vadResults">Record audio and click Segment & Transcribe</div></div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px;padding:12px;text-align:center;color:var(--text-dim);font-size:.75rem;border-top:1px solid var(--border)" id="footer"></div>
+
+<script>
+// ═══ Audio Recorder ═══
+const recorders = {};
+
+function audioBufferToWav(buf) {
+  const ch = buf.getChannelData(0);
+  const sr = buf.sampleRate;
+  const ab = new ArrayBuffer(44 + ch.length * 2);
+  const v = new DataView(ab);
+  const w = (o, s) => { for (let i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); };
+  w(0,'RIFF'); v.setUint32(4,36+ch.length*2,true); w(8,'WAVE');
+  w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+  v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+  v.setUint16(32,2,true); v.setUint16(34,16,true);
+  w(36,'data'); v.setUint32(40,ch.length*2,true);
+  let off=44;
+  for (let i=0;i<ch.length;i++,off+=2) {
+    const s = Math.max(-1,Math.min(1,ch[i]));
+    v.setInt16(off, s<0?s*0x8000:s*0x7FFF, true);
+  }
+  return new Blob([v], {type:'audio/wav'});
+}
+
+async function startRec(id) {
+  const stream = await navigator.mediaDevices.getUserMedia({audio:{sampleRate:16000,channelCount:1}});
+  const mr = new MediaRecorder(stream, {mimeType:'audio/webm;codecs=opus'});
+  const chunks = [];
+  mr.ondataavailable = e => chunks.push(e.data);
+  mr.onstop = async () => {
+    stream.getTracks().forEach(t=>t.stop());
+    const webmBlob = new Blob(chunks, {type:'audio/webm'});
+    // Decode → re-encode as WAV for server compatibility
+    const ctx = new AudioContext({sampleRate:16000});
+    const arrBuf = await webmBlob.arrayBuffer();
+    const audioBuf = await ctx.decodeAudioData(arrBuf);
+    const wavBlob = audioBufferToWav(audioBuf);
+    ctx.close();
+
+    recorders[id].blob = wavBlob;
+    const url = URL.createObjectURL(wavBlob);
+    const audioEl = document.getElementById('audio'+id);
+    audioEl.src = url; audioEl.style.display = 'block';
+    document.querySelector(`#rec${id} .play`).disabled = false;
+    document.getElementById('status'+id).textContent =
+      `✅ ${(audioBuf.duration).toFixed(1)}s recorded (${(wavBlob.size/1024).toFixed(0)}KB WAV)`;
+    enableButtons(id);
+  };
+
+  recorders[id] = {mr, stream, blob:null, analyser:null};
+  mr.start();
+
+  // Waveform visualizer
+  const actx = new AudioContext();
+  const src = actx.createMediaStreamSource(stream);
+  const analyser = actx.createAnalyser();
+  analyser.fftSize = 256;
+  src.connect(analyser);
+  recorders[id].analyser = analyser;
+  recorders[id].actx = actx;
+  drawWaveform(id, analyser);
+
+  document.querySelector(`#rec${id} .record`).disabled = true;
+  document.querySelector(`#rec${id} .record`).classList.add('recording');
+  document.querySelector(`#rec${id} .stop`).disabled = false;
+  document.getElementById('status'+id).textContent = '🔴 Recording...';
+}
+
+function stopRec(id) {
+  if (recorders[id]?.mr?.state === 'recording') {
+    recorders[id].mr.stop();
+    recorders[id].actx?.close();
+  }
+  document.querySelector(`#rec${id} .record`).disabled = false;
+  document.querySelector(`#rec${id} .record`).classList.remove('recording');
+  document.querySelector(`#rec${id} .stop`).disabled = true;
+  document.getElementById('status'+id).textContent = 'Processing...';
+}
+
+function playRec(id) {
+  const el = document.getElementById('audio'+id);
+  if (el.src) { el.style.display='block'; el.play(); }
+}
+
+function loadFile(id, input) {
+  const file = input.files[0];
+  if (!file) return;
+  recorders[id] = recorders[id] || {};
+  recorders[id].blob = file;
+  const url = URL.createObjectURL(file);
+  const audioEl = document.getElementById('audio'+id);
+  audioEl.src = url; audioEl.style.display = 'block';
+  document.querySelector(`#rec${id} .play`).disabled = false;
+  document.getElementById('status'+id).textContent = `📁 ${file.name} (${(file.size/1024).toFixed(0)}KB)`;
+  enableButtons(id);
+}
+
+function enableButtons(id) {
+  if (id==='1') document.getElementById('btnTranscribe').disabled = false;
+  if (id==='2') document.getElementById('btnTools').disabled = false;
+  if (id==='3') document.getElementById('btnVad').disabled = false;
+}
+
+function drawWaveform(id, analyser) {
+  const canvas = document.getElementById('waveform'+id);
+  const ctx = canvas.getContext('2d');
+  canvas.width = canvas.offsetWidth * 2;
+  canvas.height = canvas.offsetHeight * 2;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+
+  function draw() {
+    if (!recorders[id]?.analyser) return;
+    requestAnimationFrame(draw);
+    analyser.getByteTimeDomainData(data);
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--surface2');
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#818cf8';
+    ctx.beginPath();
+    const w = canvas.width / data.length;
+    for (let i=0; i<data.length; i++) {
+      const y = (data[i]/128.0) * canvas.height/2;
+      i===0 ? ctx.moveTo(0,y) : ctx.lineTo(i*w, y);
+    }
+    ctx.stroke();
+  }
+  draw();
+}
+
+// ═══ API Calls ═══
+async function runTranscribe() {
+  const blob = recorders['1']?.blob;
+  if (!blob) return;
+
+  const btn = document.getElementById('btnTranscribe');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Processing...';
+
+  const doProj = document.getElementById('chkProj').checked;
+  const doStan = document.getElementById('chkStandalone').checked;
+  let mode = 'both';
+  if (doProj && !doStan) mode = 'projector';
+  if (!doProj && doStan) mode = 'standalone';
+  if (!doProj && !doStan) { btn.disabled=false; btn.textContent='🚀 Transcribe'; return; }
+
+  const fd = new FormData();
+  fd.append('audio', blob, 'recording.wav');
+  fd.append('mode', mode);
+  fd.append('prompt', document.getElementById('promptText').value);
+  fd.append('temperature', document.getElementById('tempSlider').value);
+  fd.append('max_tokens', document.getElementById('tokSlider').value);
+
+  const useTools = document.getElementById('chkTools').checked;
+  fd.append('use_tools', useTools);
+  if (useTools) {
+    fd.append('enabled_tools', 'calculator,get_time,translate,search');
+  }
+
+  try {
+    const res = await fetch('/api/transcribe', {method:'POST', body:fd});
+    const data = await res.json();
+    showTranscribeResults(data, mode);
+    if (data.log_count != null) updateLogCount(data.log_count);
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+  btn.disabled = false; btn.textContent = '🚀 Transcribe';
+}
+
+function showTranscribeResults(data, mode) {
+  const cp = document.getElementById('cardProj');
+  const cs = document.getElementById('cardStandalone');
+
+  if (data.projector) {
+    cp.style.display = 'block';
+    document.getElementById('projText').textContent = data.projector.text || '—';
+    const bd = data.projector.breakdown || {};
+    document.getElementById('projTiming').innerHTML =
+      Object.entries(bd).map(([k,v]) =>
+        `<span class="timing-chip ${k==='total_ms'?'total':''}">${k.replace('_ms','')}: ${Math.round(v)}ms</span>`
+      ).join('');
+
+    // Tool results
+    const ct = document.getElementById('cardTool1');
+    if (data.projector.tool_call) {
+      ct.style.display = 'block';
+      document.getElementById('projToolJSON').textContent = JSON.stringify(data.projector.tool_call, null, 2);
+      document.getElementById('projToolRes').textContent = data.projector.tool_result || '—';
+    } else {
+      ct.style.display = 'none';
+    }
+  } else { cp.style.display = 'none'; document.getElementById('cardTool1').style.display = 'none'; }
+
+  if (data.standalone) {
+    cs.style.display = 'block';
+    document.getElementById('stanWhisper').textContent = data.standalone.whisper_text || '—';
+    document.getElementById('stanText').textContent = data.standalone.text || '—';
+    const sbd = data.standalone.breakdown || {};
+    document.getElementById('stanTiming').innerHTML =
+      Object.entries(sbd).map(([k,v]) =>
+        `<span class="timing-chip ${k==='total_ms'?'total':''}">${k.replace('_ms','')}: ${Math.round(v)}ms</span>`
+      ).join('');
+  } else { cs.style.display = 'none'; }
+
+  // Comparison bar
+  const comp = document.getElementById('compArea');
+  if (data.projector && data.standalone) {
+    const pm = data.projector.total_ms, sm = data.standalone.total_ms;
+    const maxMs = Math.max(pm, sm);
+    const pw = Math.round(pm/maxMs*100), sw = Math.round(sm/maxMs*100);
+    comp.innerHTML = `
+      <div class="comparison">
+        <div><div class="comp-label">Projector ON</div><div class="comp-bar" style="width:${pw}%;background:linear-gradient(90deg,#34d399,#059669)">${Math.round(pm)}ms</div></div>
+        <div><div class="comp-label">Projector OFF</div><div class="comp-bar" style="width:${sw}%;background:linear-gradient(90deg,#818cf8,#6366f1)">${Math.round(sm)}ms</div></div>
+      </div>`;
+  } else { comp.innerHTML = ''; }
+}
+
+async function runTools() {
+  const blob = recorders['2']?.blob;
+  if (!blob) return;
+  const btn = document.getElementById('btnTools');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Processing...';
+
+  const tools = [...document.querySelectorAll('.toolChk:checked')].map(c=>c.value).join(',');
+  const fd = new FormData();
+  fd.append('audio', blob, 'recording.wav');
+  fd.append('prompt', document.getElementById('toolPrompt').value);
+  fd.append('enabled_tools', tools);
+  fd.append('temperature', '0.3');
+
+  try {
+    const res = await fetch('/api/tools', {method:'POST', body:fd});
+    const data = await res.json();
+    document.getElementById('toolLLM').textContent = data.text || '—';
+    document.getElementById('toolTiming').innerHTML =
+      `<span class="timing-chip total">Total: ${Math.round(data.total_ms||0)}ms</span>`;
+    document.getElementById('toolJSON').textContent = data.tool_call ? JSON.stringify(data.tool_call,null,2) : 'No tool call detected';
+    document.getElementById('toolRes').textContent = data.tool_result || '—';
+  } catch(e) { alert('Error: '+e.message); }
+  btn.disabled = false; btn.textContent = '🔧 Run with Tools';
+}
+
+async function runVad() {
+  const blob = recorders['3']?.blob;
+  if (!blob) return;
+  const btn = document.getElementById('btnVad');
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Segmenting...';
+
+  const fd = new FormData();
+  fd.append('audio', blob, 'recording.wav');
+  fd.append('use_projector', document.getElementById('vadProj').checked);
+
+  try {
+    const res = await fetch('/api/vad', {method:'POST', body:fd});
+    const data = await res.json();
+    if (data.segments?.length) {
+      let html = `<table class="seg-table"><thead><tr><th>#</th><th>Start</th><th>End</th><th>Latency</th><th>Transcript</th></tr></thead><tbody>`;
+      data.segments.forEach((s,i) => {
+        html += `<tr><td>${i+1}</td><td>${s.start}s</td><td>${s.end}s</td><td>${s.ms}ms</td><td>${s.text}</td></tr>`;
+      });
+      html += `</tbody></table><p style="margin-top:10px;color:var(--text-dim)">${data.count} segments | Total: ${data.total_ms}ms | Avg: ${Math.round(data.total_ms/data.count)}ms/seg</p>`;
+      document.getElementById('vadResults').innerHTML = html;
+    } else {
+      document.getElementById('vadResults').textContent = 'No speech detected';
+    }
+  } catch(e) { alert('Error: '+e.message); }
+  btn.disabled = false; btn.textContent = '🔍 Segment & Transcribe';
+}
+
+// ═══ Tabs ═══
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-'+name).classList.add('active');
+}
+
+// ═══ Log ═══
+function updateLogCount(n) {
+  document.getElementById('logCount').textContent = n;
+}
+
+function downloadLog() {
+  window.open('/api/log/csv', '_blank');
+}
+
+async function clearLog() {
+  if (!confirm('Clear all log entries?')) return;
+  await fetch('/api/log/clear', {method:'POST'});
+  updateLogCount(0);
+}
+
+// ═══ Init ═══
+fetch('/api/info').then(r=>r.json()).then(info => {
+  document.getElementById('footer').textContent =
+    `Engine: ${info.encoder} (${info.whisper_size}) | LLM: ${info.llm} | Projector: ${info.projector_loaded?'✅':'❌'} | VAD: ${info.vad_loaded?'✅':'❌'} | ${info.device}`;
+  const sel = document.getElementById('presetSelect');
+  Object.entries(info.presets).forEach(([name, prompt]) => {
+    const opt = document.createElement('option');
+    opt.textContent = name; opt.dataset.prompt = prompt; sel.appendChild(opt);
+  });
+});
+
+// Load existing log count
+fetch('/api/log').then(r=>r.json()).then(d => updateLogCount(d.count)).catch(()=>{});
+</script>
+</body>
+</html>

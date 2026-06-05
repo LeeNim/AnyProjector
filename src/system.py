@@ -1,11 +1,12 @@
 """
-system.py - Khởi tạo và quản lý toàn bộ hệ thống AnyProjector (Phase 1).
+system.py - Khởi tạo và quản lý toàn bộ hệ thống AnyProjector.
 
 Orchestration:
 1. Tải Audio Encoder → đóng băng 100%
 2. Tải LLM Decoder → 4-bit quantization (bitsandbytes) → đóng băng 100%
 3. Tạo AnyProjector (Projector) → requires_grad=True
-4. Nối output Projector vào inputs_embeds của LLM
+4. Text prompt → LLM embed_tokens → prompt_embeds (context cho LLM)
+5. Nối [prompt_embeds | audio_embeds] vào inputs_embeds của LLM
 """
 
 import logging
@@ -247,9 +248,7 @@ class AnyProjectorSystem:
 
         logger.info(f"Projector created: {self.projector}")
 
-    def forward_projector(
-        self, encoder_output: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward_projector(self, encoder_output: torch.Tensor) -> torch.Tensor:
         """Chạy encoder output qua Projector → sẵn sàng nối vào LLM.
 
         Args:
@@ -257,14 +256,13 @@ class AnyProjectorSystem:
 
         Returns:
             semantic_embeds: Cho LLM inputs_embeds. (batch, seq_len//2, llm_dim)
-            vad_prob: Xác suất VAD. (batch, 1)
         """
         if not self._built:
             raise RuntimeError("System not built. Call build() first.")
         return self.projector(encoder_output)
 
     def get_llm_embedding_layer(self) -> nn.Embedding:
-        """Lấy embedding layer của LLM (dùng để nối inputs_embeds).
+        """Lấy embedding layer của LLM (dùng để tạo prompt_embeds từ text).
 
         Returns:
             nn.Embedding layer của LLM.

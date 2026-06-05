@@ -1,121 +1,214 @@
 """
-projector.py - Kiến trúc mạng AnyProjector (Phase 1).
+projector.py - Kiến trúc mạng AnyProjector (Q-Former).
 
-Mạng cầu nối (Projector) tự động co giãn theo encoder_dim và llm_dim.
+Q-Former (BLIP-2 style) bridge giữa Audio Encoder và LLM.
+Dùng learnable query tokens + cross-attention để nén encoder output
+thành số lượng tokens cố định, bất kể audio length.
 
 Kiến trúc:
-    ┌──────────────────────┐
-    │  Encoder Output      │  (batch, seq_len, encoder_dim)
-    └──────────┬───────────┘
-               │
-    ┌──────────▼───────────┐
-    │  Temporal Compression│  Conv1d(stride=2) → giảm 50% token
-    │  (encoder_dim)       │  (batch, seq_len//2, encoder_dim)
-    └──────────┬───────────┘
-               │
-        ┌──────┴──────┐
-        │             │
-   ┌────▼────┐   ┌────▼────┐
-   │Semantic │   │  VAD    │
-   │ Route   │   │ Route   │
-   │Linear   │   │Linear   │
-   │(→llm_d) │   │(→1)     │
-   └────┬────┘   └────┬────┘
-        │             │
-   (batch,seq//2,  (batch, 1)
-    llm_dim)       σ → [0,1]
+    ┌──────────────────────────────────┐
+    │  Encoder Output (1500, enc_dim)  │  ← Whisper (pad 30s)
+    │  + Attention Mask                │  ← Chỉ real tokens, bỏ pad
+    └──────────────┬───────────────────┘
+                   │
+    ┌──────────────▼───────────────────┐
+    │  Pre-Projection                  │
+    │  Linear(enc_dim → enc_dim)       │
+    │  + GELU + LayerNorm              │
+    │  (transform features trước khi   │
+    │   Q-Former compress)             │
+    └──────────────┬───────────────────┘
+                   │  Key, Value
+    ┌──────────────▼───────────────────┐
+    │  Learnable Queries (64, qf_dim)  │
+    │  ┌─────────────────────────────┐ │
+    │  │ Self-Attention              │ │
+    │  │ Cross-Attention (to encoder)│ │
+    │  │ Feed-Forward Network        │ │
+    │  └─────────────────────────────┘ │
+    │         × num_layers             │
+    └──────────────┬───────────────────┘
+                   │
+    ┌──────────────▼───────────────────┐
+    │  Output Projection               │
+    │  Linear(qf_dim → llm_dim)        │
+    └──────────────┬───────────────────┘
+                   │
+                   ▼
+    (batch, 64, llm_dim) → LLM inputs_embeds
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+
+
+class QFormerLayer(nn.Module):
+    """Single Q-Former layer: Self-Attn → Cross-Attn → FFN.
+
+    Supports optional dropout (v0.9.7+) for regularization.
+    During inference (.eval()), dropout is automatically disabled.
+    """
+
+    def __init__(self, qformer_dim: int, encoder_dim: int, num_heads: int = 8,
+                 ffn_ratio: int = 4, dropout: float = 0.0):
+        super().__init__()
+
+        # Self-Attention (queries attend to each other)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim=qformer_dim, num_heads=num_heads, batch_first=True,
+        )
+        self.self_attn_norm = nn.LayerNorm(qformer_dim)
+        self.self_attn_drop = nn.Dropout(dropout)
+
+        # Cross-Attention (queries attend to encoder output)
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=qformer_dim, num_heads=num_heads,
+            kdim=encoder_dim, vdim=encoder_dim, batch_first=True,
+        )
+        self.cross_attn_norm = nn.LayerNorm(qformer_dim)
+        self.cross_attn_drop = nn.Dropout(dropout)
+
+        # Feed-Forward Network (with dropout between GELU and second Linear)
+        ffn_hidden = qformer_dim * ffn_ratio
+        self.ffn = nn.Sequential(
+            nn.Linear(qformer_dim, ffn_hidden),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(ffn_hidden, qformer_dim),
+        )
+        self.ffn_norm = nn.LayerNorm(qformer_dim)
+
+    def forward(self, queries: torch.Tensor, encoder_out: torch.Tensor,
+                encoder_mask: torch.Tensor | None = None) -> torch.Tensor:
+        """
+        Args:
+            queries: (batch, num_queries, qformer_dim)
+            encoder_out: (batch, enc_seq_len, encoder_dim)
+            encoder_mask: (batch, enc_seq_len) — True = pad (ignored),
+                          False = real token. Used as key_padding_mask.
+        Returns:
+            queries: (batch, num_queries, qformer_dim)
+        """
+        # Self-Attention + residual
+        q = self.self_attn_norm(queries)
+        q, _ = self.self_attn(q, q, q)
+        queries = queries + self.self_attn_drop(q)
+
+        # Cross-Attention + residual
+        q = self.cross_attn_norm(queries)
+        q, _ = self.cross_attn(
+            query=q, key=encoder_out, value=encoder_out,
+            key_padding_mask=encoder_mask,
+        )
+        queries = queries + self.cross_attn_drop(q)
+
+        # FFN + residual
+        queries = queries + self.ffn(self.ffn_norm(queries))
+
+        return queries
 
 
 class AnyProjector(nn.Module):
-    """Projector mạng cầu nối giữa Audio Encoder và LLM.
+    """Q-Former Projector — bridge giữa Audio Encoder và LLM.
 
-    Tự động co giãn theo kích thước hidden của encoder và LLM.
-    Chỉ module này có requires_grad=True trong quá trình huấn luyện.
+    Dùng learnable query tokens + cross-attention để nén encoder output
+    thành số lượng tokens cố định. Hỗ trợ attention mask để bỏ qua
+    padding tokens từ encoder (Whisper pad 30s).
 
     Args:
-        encoder_dim: Kích thước hidden output của Audio Encoder.
-        llm_dim: Kích thước hidden input của LLM.
-        conv_kernel_size: Kernel size cho Conv1d temporal compression.
+        encoder_dim: Hidden size của Audio Encoder (e.g. 768, 1024).
+        llm_dim: Hidden size của LLM (e.g. 1536, 3072).
+        num_queries: Số learnable query tokens (output length).
+        qformer_dim: Hidden dim bên trong Q-Former.
+        num_layers: Số Q-Former layers (self-attn + cross-attn + FFN).
+        num_heads: Số attention heads.
     """
 
-    def __init__(self, encoder_dim: int, llm_dim: int, conv_kernel_size: int = 3):
+    def __init__(self, encoder_dim: int, llm_dim: int,
+                 num_queries: int = 64, qformer_dim: int = 768,
+                 num_layers: int = 2, num_heads: int = 8,
+                 dropout: float = 0.0):
         super().__init__()
 
         self.encoder_dim = encoder_dim
         self.llm_dim = llm_dim
+        self.num_queries = num_queries
+        self.qformer_dim = qformer_dim
 
-        # --- Nén thời gian (Temporal Compression) ---
-        # Conv1d stride=2 → giảm 50% số lượng token truyền tải
-        # padding = kernel_size // 2 để giữ output gần đúng seq_len // 2
-        self.temporal_conv = nn.Conv1d(
-            in_channels=encoder_dim,
-            out_channels=encoder_dim,
-            kernel_size=conv_kernel_size,
-            stride=2,
-            padding=conv_kernel_size // 2,
+        # Pre-projection: transform encoder features before Q-Former
+        # Decouples "feature transformation" from "information compression"
+        self.pre_proj = nn.Sequential(
+            nn.Linear(encoder_dim, encoder_dim),
+            nn.GELU(),
+            nn.LayerNorm(encoder_dim),
         )
-        self.activation = nn.GELU()
-        self.layer_norm = nn.LayerNorm(encoder_dim)
 
-        # --- Nhánh LLM (Semantic Route) ---
-        # Chiếu không gian âm thanh → không gian ngữ nghĩa LLM
-        self.semantic_proj = nn.Linear(encoder_dim, llm_dim)
+        # Learnable query tokens
+        self.query_tokens = nn.Parameter(
+            torch.randn(1, num_queries, qformer_dim) * 0.02
+        )
 
-        # --- Nhánh VAD (Control Route) ---
-        # Nhả ra xác suất nhị phân: 0 = Đang nói, 1 = Đã nói xong / Ngắt
-        self.vad_head = nn.Linear(encoder_dim, 1)
+        # Q-Former transformer layers
+        self.layers = nn.ModuleList([
+            QFormerLayer(qformer_dim, encoder_dim, num_heads, dropout=dropout)
+            for _ in range(num_layers)
+        ])
 
-    def forward(
-        self, encoder_output: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Forward pass qua Projector.
+        # Final LayerNorm before projection
+        self.output_norm = nn.LayerNorm(qformer_dim)
+
+        # Project Q-Former dim → LLM dim
+        self.output_proj = nn.Sequential(
+            nn.Linear(qformer_dim, llm_dim),
+        )
+
+    def forward(self, encoder_output: torch.Tensor,
+                encoder_mask: torch.Tensor | None = None) -> torch.Tensor:
+        """Forward pass qua Q-Former.
 
         Args:
             encoder_output: Output từ Audio Encoder.
-                Shape: (batch, seq_len, encoder_dim)
+                Shape: (batch, enc_seq_len, encoder_dim)
+            encoder_mask: Padding mask cho encoder tokens.
+                Shape: (batch, enc_seq_len)
+                True = padding (bỏ qua), False = real token.
+                None = không mask (attend tất cả).
 
         Returns:
-            semantic_embeds: Vector ngữ nghĩa cho LLM inputs_embeds.
-                Shape: (batch, seq_len // 2, llm_dim)
-            vad_prob: Xác suất VAD (kết thúc câu nói).
-                Shape: (batch, 1), giá trị trong [0, 1]
+            projected_queries: Output embeddings cho LLM.
+                Shape: (batch, num_queries, llm_dim)
         """
-        # --- Temporal Compression ---
-        # Conv1d cần input shape: (batch, channels, seq_len)
-        x = encoder_output.transpose(1, 2)  # (batch, encoder_dim, seq_len)
-        x = self.temporal_conv(x)  # (batch, encoder_dim, seq_len // 2)
-        x = x.transpose(1, 2)  # (batch, seq_len // 2, encoder_dim)
+        batch_size = encoder_output.shape[0]
 
-        # Activation + LayerNorm
-        x = self.activation(x)
-        x = self.layer_norm(x)
+        # Pre-project encoder features (transform before compress)
+        encoder_output = self.pre_proj(encoder_output)
 
-        # --- Semantic Route ---
-        semantic_embeds = self.semantic_proj(x)  # (batch, seq_len // 2, llm_dim)
+        # Expand queries for batch
+        queries = self.query_tokens.expand(batch_size, -1, -1)
 
-        # --- VAD Route ---
-        # Global average pooling over time → xác suất duy nhất cho cả utterance
-        vad_logit = self.vad_head(x.mean(dim=1))  # (batch, 1)
-        vad_prob = torch.sigmoid(vad_logit)
+        # Pass through Q-Former layers
+        for layer in self.layers:
+            queries = layer(queries, encoder_output, encoder_mask)
 
-        return semantic_embeds, vad_prob
+        # Normalize + project to LLM space
+        queries = self.output_norm(queries)
+        projected = self.output_proj(queries)
+
+        return projected
 
     def count_parameters(self) -> int:
-        """Đếm tổng số tham số trainable."""
+        """Count total trainable parameters."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
     def __repr__(self) -> str:
         params = self.count_parameters()
+        n_layers = len(self.layers)
         return (
-            f"AnyProjector(\n"
+            f"AnyProjector(Q-Former)\n"
             f"  encoder_dim={self.encoder_dim}, llm_dim={self.llm_dim}\n"
-            f"  temporal_conv=Conv1d({self.encoder_dim}→{self.encoder_dim}, stride=2)\n"
-            f"  semantic_proj=Linear({self.encoder_dim}→{self.llm_dim})\n"
-            f"  vad_head=Linear({self.encoder_dim}→1)\n"
-            f"  trainable_params={params:,}\n"
-            f")"
+            f"  pre_proj=Linear({self.encoder_dim}->{self.encoder_dim})+GELU+LN\n"
+            f"  queries={self.num_queries}, qformer_dim={self.qformer_dim}\n"
+            f"  layers={n_layers}, output=Linear({self.qformer_dim}->{self.llm_dim})\n"
+            f"  trainable_params={params:,}"
         )

@@ -2,7 +2,7 @@
 # AnyProjector .gitignore
 # ========================
 
-# --- Documentation & Planning (not source code) ---
+# --- Documentation, Thesis, Notes (results/artifacts, not source) ---
 Docs and more/
 
 # --- Python ---
@@ -21,9 +21,11 @@ eggs/
 venv/
 .venv/
 env/
+.env
 .env/
 
 # --- IDE & Editor ---
+.agents/
 .agent/
 .vscode/
 .idea/
@@ -41,24 +43,56 @@ desktop.ini
 # --- Jupyter ---
 .ipynb_checkpoints/
 
-# --- PyTorch / ML ---
+# --- PyTorch / ML Model Weights ---
 *.pt
 *.pth
 *.ckpt
 *.safetensors
+*.bin
 wandb/
 runs/
-logs/
 outputs/
+
+# --- Training Artifacts (results, not scripts) ---
+logs/
+checkpoint/
+projectorTrained/
+lora/
+results/
+training_analysis/
+
+# --- Data & Dataset (too large for git) ---
+dataset/
+data/
+
+# --- Scratch / Temp / One-off ---
+scratch/
+*.tmp
+*.log
+*.zip
+
+# --- Result files (generated output, not source) ---
+bestmodel_log.txt
+eval_trace.txt
+_eval_error.txt
+evaluation_results.json
+evaluation_train_set.json
+whisper_cache.json
+dataset_info.json
+next_100.json
+next_50.json
+PROGRESS.md
+scripts/demo_log.csv
+
+# --- Colab session artifacts ---
+511f5ca9-*/
+511f5ca9-*.zip
 
 # --- Hugging Face Cache ---
 .cache/
 
-# --- Dataset (user-managed, too large for git) ---
-dataset/
+# --- Modelfile (Ollama-specific, local only) ---
+Modelfile
 
-# --- Misc ---
-*.log
-*.tmp
-
-Docs and more/
+# --- Utility scripts (one-off, not core) ---
+check_disk.ps1
